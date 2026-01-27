@@ -2,6 +2,10 @@ package domainconnect
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -618,5 +622,234 @@ func TestCheckTemplateSupported(t *testing.T) {
 	err = client.CheckTemplateSupported(ctx, cfg, "exampleservice.domainconnect.org", []string{"template1"})
 	if err != nil {
 		t.Logf("Template check failed (may be expected if provider doesn't support this template): %v", err)
+	}
+}
+
+func TestGenerateSignature_ExactMatch(t *testing.T) {
+	privateKey, err := os.ReadFile("testdata/private_key.pem")
+	if err != nil {
+		t.Fatalf("failed to read private key: %v", err)
+	}
+
+	domain := "example.com"
+	host := "www"
+	params := map[string]string{"IP": "132.148.25.185", "RANDOMTEXT": "shm:1531371203:Hejo"}
+	keyID := "_dck1"
+
+	result, err := generateSignature(domain, host, params, privateKey, keyID)
+	if err != nil {
+		t.Fatalf("generateSignature failed: %v", err)
+	}
+
+	// sig is deterministic (RSA-SHA256 PKCS1v15), sigts varies by time
+	expected := "VB1WAw1rLGyT7Q7UHMe_OPwSZ2HKj7r7rXN6FK22oWbHK7ATug4ZRHyVmnSWL_8r3brhi21_yJ0lH0me63gyPd74biDHCIRnCdYtyik6pankjXjDvF65uBUiZViRza9RhThFCxzCxdUH1ZNJcDL9LUFqC7cMVXvU-1dtn02KdUwViwSJDGWIAMkgLE92jC7aPWVzfA30pSPSCr__hwcJtydGVeFs5pQ-mAjYARP3w_9aWja3k9tMMk5CpFK8zeLIX6rbrHdhmfI9U0AJkRVBpfgmrjDp_TeHFZHPXWgwWg6ZjouQ_mSkaO9i9gBZP8YcT-m9gvRPqlzOViEdlRI1Ug"
+	if result["sig"] != expected {
+		t.Errorf("sig mismatch:\ngot  %s\nwant %s", result["sig"], expected)
+	}
+	if result["key"] != "_dck1" {
+		t.Errorf("key = %q, want %q", result["key"], "_dck1")
+	}
+	if result["sigts"] == "" {
+		t.Error("missing sigts")
+	}
+}
+
+func TestGetDomainConfig_NoDomainConnectRecord(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	client := New()
+	_, err := client.GetDomainConfig(context.Background(), "randomnonexistent.bike")
+	if !errors.Is(err, ErrNoDomainConnectRecord) {
+		t.Errorf("expected ErrNoDomainConnectRecord, got %v", err)
+	}
+}
+
+func TestCheckTemplateSupported_NotSupported(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	client := New()
+	cfg, err := client.GetDomainConfig(context.Background(), "diabtrack.com")
+	if err != nil {
+		t.Fatalf("GetDomainConfig failed: %v", err)
+	}
+
+	err = client.CheckTemplateSupported(context.Background(), cfg,
+		"exampleservice.domainconnect.org", []string{"template_not_exists"})
+	if !errors.Is(err, ErrTemplateNotSupported) {
+		t.Errorf("expected ErrTemplateNotSupported, got %v", err)
+	}
+}
+
+func TestGetAsyncToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/oauth/access_token" {
+			t.Errorf("wrong path: %s", r.URL.Path)
+		}
+		if r.Method != "POST" {
+			t.Errorf("wrong method: %s", r.Method)
+		}
+		q := r.URL.Query()
+		if q.Get("grant_type") != "authorization_code" {
+			t.Errorf("wrong grant_type: %s", q.Get("grant_type"))
+		}
+		if q.Get("code") != "testcode" {
+			t.Errorf("wrong code: %s", q.Get("code"))
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "test_access_token",
+			"refresh_token": "test_refresh_token",
+			"expires_in":    3600,
+		})
+	}))
+	defer srv.Close()
+
+	client := New()
+	asyncCtx := &AsyncContext{
+		Code:   "testcode",
+		Config: &Config{URLAPI: srv.URL},
+	}
+
+	result, err := client.GetAsyncToken(context.Background(), asyncCtx, AsyncCredentials{
+		ClientID: "myclient", ClientSecret: "mysecret", APIURL: srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AccessToken != "test_access_token" {
+		t.Errorf("AccessToken = %q, want %q", result.AccessToken, "test_access_token")
+	}
+	if result.RefreshToken != "test_refresh_token" {
+		t.Errorf("RefreshToken = %q, want %q", result.RefreshToken, "test_refresh_token")
+	}
+	if result.AccessTokenExpiresIn != 3600 {
+		t.Errorf("AccessTokenExpiresIn = %d, want %d", result.AccessTokenExpiresIn, 3600)
+	}
+	if result.IssuedAt == 0 {
+		t.Error("IssuedAt not set")
+	}
+}
+
+func TestGetAsyncToken_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+	}))
+	defer srv.Close()
+
+	client := New()
+	asyncCtx := &AsyncContext{Code: "badcode", Config: &Config{URLAPI: srv.URL}}
+	_, err := client.GetAsyncToken(context.Background(), asyncCtx, AsyncCredentials{
+		ClientID: "x", ClientSecret: "x", APIURL: srv.URL,
+	})
+	if !errors.Is(err, ErrAsyncToken) {
+		t.Errorf("expected ErrAsyncToken, got %v", err)
+	}
+}
+
+func TestRefreshAsyncToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("grant_type") != "refresh_token" {
+			t.Errorf("wrong grant_type: %s", q.Get("grant_type"))
+		}
+		if q.Get("refresh_token") != "oldrefresh" {
+			t.Errorf("wrong refresh_token: %s", q.Get("refresh_token"))
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "new_access_token",
+			"refresh_token": "new_refresh_token",
+			"expires_in":    7200,
+		})
+	}))
+	defer srv.Close()
+
+	client := New()
+	asyncCtx := &AsyncContext{
+		RefreshToken: "oldrefresh",
+		Config:       &Config{URLAPI: srv.URL},
+	}
+	result, err := client.RefreshAsyncToken(context.Background(), asyncCtx, AsyncCredentials{
+		ClientID: "x", ClientSecret: "x", APIURL: srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AccessToken != "new_access_token" {
+		t.Errorf("AccessToken = %q, want %q", result.AccessToken, "new_access_token")
+	}
+	if result.RefreshToken != "new_refresh_token" {
+		t.Errorf("RefreshToken = %q, want %q", result.RefreshToken, "new_refresh_token")
+	}
+}
+
+func TestApplyAsync(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("wrong method: %s", r.Method)
+		}
+		if r.Header.Get("Authorization") != "Bearer mytoken" {
+			t.Errorf("wrong auth: %s", r.Header.Get("Authorization"))
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := New()
+	asyncCtx := &AsyncContext{
+		AccessToken: "mytoken",
+		ProviderID:  "provider",
+		ServiceID:   "svc",
+		Config:      &Config{DomainRoot: "example.com", URLAPI: srv.URL},
+	}
+	err := client.ApplyAsync(context.Background(), asyncCtx, ApplyAsyncOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyAsync_Conflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	client := New()
+	asyncCtx := &AsyncContext{
+		AccessToken: "mytoken",
+		ProviderID:  "provider",
+		ServiceID:   "svc",
+		Config:      &Config{DomainRoot: "example.com", URLAPI: srv.URL},
+	}
+	err := client.ApplyAsync(context.Background(), asyncCtx, ApplyAsyncOptions{})
+	if !errors.Is(err, ErrConflictOnApply) {
+		t.Errorf("expected ErrConflictOnApply, got %v", err)
+	}
+}
+
+func TestDeleteAsync(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" {
+			t.Errorf("wrong method: %s", r.Method)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := New()
+	asyncCtx := &AsyncContext{
+		AccessToken: "mytoken",
+		ProviderID:  "provider",
+		ServiceID:   "svc",
+		Config:      &Config{DomainRoot: "example.com", URLAPI: srv.URL},
+	}
+	err := client.DeleteAsync(context.Background(), asyncCtx, "")
+	if err != nil {
+		t.Fatal(err)
 	}
 }
