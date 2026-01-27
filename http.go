@@ -32,7 +32,10 @@ func (c *Client) doJSON(ctx context.Context, method, urlStr string, result any) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("HTTP %d (failed to read body: %v)", resp.StatusCode, err)
+		}
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -55,7 +58,10 @@ func (c *Client) postForm(ctx context.Context, urlStr string, data url.Values, r
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("HTTP %d (failed to read body: %v)", resp.StatusCode, err)
+		}
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 

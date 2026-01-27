@@ -57,17 +57,15 @@ func (c *Client) GetAsyncContext(ctx context.Context, opts AsyncContextOptions) 
 	baseURL := fmt.Sprintf("%s/v2/domainTemplates/providers/%s",
 		ensureScheme(cfg.URLAsyncUX), opts.ProviderID)
 
-	// Add service IDs
-	if opts.ServiceID != "" {
-		baseURL += "?services=" + opts.ServiceID
-	}
-
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err
 	}
 
 	q := u.Query()
+	if opts.ServiceID != "" {
+		q.Set("services", opts.ServiceID)
+	}
 	q.Set("domain", cfg.DomainRoot)
 	if cfg.Host != "" {
 		q.Set("host", cfg.Host)
@@ -349,7 +347,7 @@ func (c *Client) DeleteAsync(ctx context.Context, asyncCtx *AsyncContext, servic
 	return nil
 }
 
-// parseCallbackURL extracts code and state from OAuth callback URL.
+// ParseCallbackURL extracts code and state from OAuth callback URL.
 func ParseCallbackURL(callbackURL string) (code, state string, err error) {
 	u, err := url.Parse(callbackURL)
 	if err != nil {
