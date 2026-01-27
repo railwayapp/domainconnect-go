@@ -1,5 +1,7 @@
 # domainconnect-go
 
+[![CI](https://github.com/railwayapp/domainconnect-go/actions/workflows/ci.yml/badge.svg)](https://github.com/railwayapp/domainconnect-go/actions/workflows/ci.yml)
+
 Go implementation of the [Domain Connect](https://www.domainconnect.org/) protocol.
 
 Port of [domainconnect_python](https://github.com/Domain-Connect/domainconnect_python).
