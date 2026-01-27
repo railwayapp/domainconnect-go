@@ -1,0 +1,14 @@
+[tools]
+go = "1.21"
+
+[tasks.setup]
+run = "go mod tidy"
+
+[tasks.test]
+run = "go test -v ./..."
+
+[tasks.lint]
+run = "go vet ./..."
+
+[tasks.fmt]
+run = "go fmt ./..."
