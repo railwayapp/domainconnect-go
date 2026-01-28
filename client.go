@@ -29,6 +29,7 @@ type Config struct {
 	ProviderDisplayName string
 	UXSize              *Size
 	URLControlPanel     string
+	Hosts               map[string]any
 }
 
 // Client is a Domain Connect client.
@@ -102,7 +103,8 @@ func (c *Client) GetDomainConfig(ctx context.Context, domain string) (*Config, e
 		URLAPI              string      `json:"urlAPI"`
 		Width               json.Number `json:"width"`
 		Height              json.Number `json:"height"`
-		URLControlPanel     string      `json:"urlControlPanel"`
+		URLControlPanel     string          `json:"urlControlPanel"`
+		Hosts               json.RawMessage `json:"hosts"`
 	}
 
 	if err := c.doJSON(ctx, http.MethodGet, settingsURL, &settings); err != nil {
@@ -124,6 +126,13 @@ func (c *Client) GetDomainConfig(ctx context.Context, domain string) (*Config, e
 		ProviderName:        settings.ProviderName,
 		ProviderDisplayName: settings.ProviderDisplayName,
 		URLControlPanel:     settings.URLControlPanel,
+	}
+
+	if len(settings.Hosts) > 0 {
+		var hosts map[string]any
+		if err := json.Unmarshal(settings.Hosts, &hosts); err == nil {
+			cfg.Hosts = hosts
+		}
 	}
 
 	if w, err := settings.Width.Int64(); err == nil && w > 0 {

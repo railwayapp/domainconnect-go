@@ -33,13 +33,14 @@ type AsyncCredentials struct {
 
 // AsyncContextOptions configures async context creation.
 type AsyncContextOptions struct {
-	Config      *Config
-	ProviderID  string
-	ServiceID   string
-	Params      map[string]string
-	RedirectURL string
-	State       string
-	GroupIDs    []string
+	Config         *Config
+	ProviderID     string
+	ServiceID      string
+	ServiceIDInPath bool
+	Params         map[string]string
+	RedirectURL    string
+	State          string
+	GroupIDs       []string
 }
 
 // GetAsyncContext creates an async context with consent URL.
@@ -63,7 +64,9 @@ func (c *Client) GetAsyncContext(ctx context.Context, opts AsyncContextOptions) 
 	}
 
 	q := u.Query()
-	if opts.ServiceID != "" {
+	if opts.ServiceIDInPath && opts.ServiceID != "" {
+		u.Path += "/services/" + opts.ServiceID
+	} else if opts.ServiceID != "" {
 		q.Set("services", opts.ServiceID)
 	}
 	q.Set("domain", cfg.DomainRoot)
@@ -276,7 +279,7 @@ func (c *Client) ApplyAsync(ctx context.Context, asyncCtx *AsyncContext, opts Ap
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
-	case http.StatusOK:
+	case http.StatusOK, http.StatusAccepted:
 		return nil
 	case http.StatusConflict:
 		return ErrConflictOnApply
