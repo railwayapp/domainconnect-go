@@ -5,7 +5,7 @@ go = "1.21"
 run = "go mod tidy"
 
 [tasks.test]
-run = "go test -v ./..."
+run = "CGO_ENABLED=0 go test -v ./..."
 
 [tasks.lint]
 run = "go vet ./..."

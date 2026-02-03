@@ -832,6 +832,42 @@ func TestApplyAsync_Conflict(t *testing.T) {
 	}
 }
 
+func TestGetSyncURL_SigIsLast(t *testing.T) {
+	privateKey, err := os.ReadFile("testdata/private_key.pem")
+	if err != nil {
+		t.Fatalf("failed to read private key: %v", err)
+	}
+
+	client := New()
+	u, err := client.GetSyncURL(context.Background(), SyncURLOptions{
+		Config: &Config{
+			DomainRoot: "example.com",
+			Host:       "www",
+			URLSyncUX:  "connect.provider.com",
+		},
+		ProviderID: "provider1",
+		ServiceID:  "svc1",
+		Params:     map[string]string{"IP": "1.2.3.4", "RANDOMTEXT": "hello"},
+		PrivateKey: privateKey,
+		KeyID:      "key1",
+		GroupIDs:   []string{"g1"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Extract raw query string and verify sig is the last parameter
+	parts := strings.SplitN(u, "?", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected query string in URL %q", u)
+	}
+	params := strings.Split(parts[1], "&")
+	last := params[len(params)-1]
+	if !strings.HasPrefix(last, "sig=") {
+		t.Errorf("expected sig as last param, got %q (full query: %s)", last, parts[1])
+	}
+}
+
 func TestDeleteAsync(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "DELETE" {
