@@ -39,9 +39,10 @@ func generateSignature(queryParams url.Values, privateKeyPEM []byte, keyID strin
 	sigts = fmt.Sprintf("%d", time.Now().Unix())
 
 	// Clone params and add sigts
+	// Note: Cloudflare includes "key" in signature (contrary to spec which says exclude both sig and key)
 	signParams := url.Values{}
 	for k, v := range queryParams {
-		if k != "sig" && k != "key" {
+		if k != "sig" {
 			signParams[k] = v
 		}
 	}

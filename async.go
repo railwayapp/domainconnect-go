@@ -252,16 +252,16 @@ func (c *Client) ApplyAsync(ctx context.Context, asyncCtx *AsyncContext, opts Ap
 		q.Set("force", "1")
 	}
 
-	// Sign if private key provided
+	// Sign if private key provided (Cloudflare includes key in signature)
 	if len(opts.PrivateKey) > 0 {
+		if opts.KeyID != "" {
+			q.Set("key", opts.KeyID)
+		}
 		sig, sigts, err := generateSignature(q, opts.PrivateKey, opts.KeyID)
 		if err != nil {
 			return fmt.Errorf("generate signature: %w", err)
 		}
 		q.Set("sigts", sigts)
-		if opts.KeyID != "" {
-			q.Set("key", opts.KeyID)
-		}
 		u.RawQuery = q.Encode() + "&sig=" + sig
 	} else {
 		u.RawQuery = q.Encode()
