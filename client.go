@@ -244,7 +244,8 @@ func (c *Client) GetSyncURL(ctx context.Context, opts SyncURLOptions) (string, e
 		}
 		q.Set("sigts", sigts)
 		// sig must be last (Cloudflare requirement)
-		u.RawQuery = q.Encode() + "&sig=" + sig
+		// URL-encode the signature since it uses standard Base64 (contains +, /, =)
+		u.RawQuery = q.Encode() + "&sig=" + url.QueryEscape(sig)
 	} else {
 		u.RawQuery = q.Encode()
 	}

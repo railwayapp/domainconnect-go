@@ -58,5 +58,7 @@ func generateSignature(queryParams url.Values, privateKeyPEM []byte, keyID strin
 		return "", "", fmt.Errorf("sign: %w", err)
 	}
 
-	return base64.RawURLEncoding.EncodeToString(sigBytes), sigts, nil
+	// Use standard Base64 encoding per Domain Connect spec example
+	// The sig will be URL-encoded when added to the query string
+	return base64.StdEncoding.EncodeToString(sigBytes), sigts, nil
 }
