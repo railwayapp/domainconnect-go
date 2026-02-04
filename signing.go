@@ -37,8 +37,10 @@ func generateSignature(domain, host string, params map[string]string, privateKey
 		return nil, fmt.Errorf("expected RSA private key")
 	}
 
-	// Build signature data: domain + host + sorted params
-	// Format: domain={domain}&host={host}&key=value&key2=value2...
+	// Generate timestamp first since it must be included in signature
+	sigts := fmt.Sprintf("%d", time.Now().Unix())
+
+	// Build signature data: domain + host + sorted params + sigts
 	sigData := url.Values{}
 	sigData.Set("domain", domain)
 	if host != "" {
@@ -54,6 +56,9 @@ func generateSignature(domain, host string, params map[string]string, privateKey
 	for _, k := range keys {
 		sigData.Set(k, params[k])
 	}
+
+	// Add sigts to signed data (required by Domain Connect spec)
+	sigData.Set("sigts", sigts)
 
 	// Build the string to sign (sorted by key)
 	var parts []string
@@ -77,14 +82,12 @@ func generateSignature(domain, host string, params map[string]string, privateKey
 	}
 
 	result := map[string]string{
-		"sig": base64.RawURLEncoding.EncodeToString(sig),
+		"sig":   base64.RawURLEncoding.EncodeToString(sig),
+		"sigts": sigts,
 	}
 	if keyID != "" {
 		result["key"] = keyID
 	}
-
-	// Add timestamp for signature freshness
-	result["sigts"] = fmt.Sprintf("%d", time.Now().Unix())
 
 	return result, nil
 }
