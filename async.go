@@ -254,16 +254,18 @@ func (c *Client) ApplyAsync(ctx context.Context, asyncCtx *AsyncContext, opts Ap
 
 	// Sign if private key provided
 	if len(opts.PrivateKey) > 0 {
-		sigParams, err := generateSignature(cfg.DomainRoot, cfg.Host, params, opts.PrivateKey, opts.KeyID)
+		sig, sigts, err := generateSignature(q, opts.PrivateKey, opts.KeyID)
 		if err != nil {
 			return fmt.Errorf("generate signature: %w", err)
 		}
-		for k, v := range sigParams {
-			q.Set(k, v)
+		q.Set("sigts", sigts)
+		if opts.KeyID != "" {
+			q.Set("key", opts.KeyID)
 		}
+		u.RawQuery = q.Encode() + "&sig=" + sig
+	} else {
+		u.RawQuery = q.Encode()
 	}
-
-	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), nil)
 	if err != nil {
