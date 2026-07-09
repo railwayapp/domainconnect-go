@@ -50,7 +50,7 @@ func WithHTTPClient(c *http.Client) Option {
 // New creates a new Domain Connect client.
 func New(opts ...Option) *Client {
 	c := &Client{
-		httpClient: http.DefaultClient,
+		httpClient: newGuardedHTTPClient(),
 	}
 	for _, opt := range opts {
 		opt(c)
