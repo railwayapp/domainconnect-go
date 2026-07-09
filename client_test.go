@@ -708,7 +708,7 @@ func TestGetAsyncToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New()
+	client := New(WithHTTPClient(srv.Client()))
 	asyncCtx := &AsyncContext{
 		Code:   "testcode",
 		Config: &Config{URLAPI: srv.URL},
@@ -741,7 +741,7 @@ func TestGetAsyncToken_Error(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New()
+	client := New(WithHTTPClient(srv.Client()))
 	asyncCtx := &AsyncContext{Code: "badcode", Config: &Config{URLAPI: srv.URL}}
 	_, err := client.GetAsyncToken(context.Background(), asyncCtx, AsyncCredentials{
 		ClientID: "x", ClientSecret: "x", APIURL: srv.URL,
@@ -769,7 +769,7 @@ func TestRefreshAsyncToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New()
+	client := New(WithHTTPClient(srv.Client()))
 	asyncCtx := &AsyncContext{
 		RefreshToken: "oldrefresh",
 		Config:       &Config{URLAPI: srv.URL},
@@ -800,7 +800,7 @@ func TestApplyAsync(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New()
+	client := New(WithHTTPClient(srv.Client()))
 	asyncCtx := &AsyncContext{
 		AccessToken: "mytoken",
 		ProviderID:  "provider",
@@ -819,7 +819,7 @@ func TestApplyAsync_Conflict(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New()
+	client := New(WithHTTPClient(srv.Client()))
 	asyncCtx := &AsyncContext{
 		AccessToken: "mytoken",
 		ProviderID:  "provider",
@@ -877,7 +877,7 @@ func TestDeleteAsync(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := New()
+	client := New(WithHTTPClient(srv.Client()))
 	asyncCtx := &AsyncContext{
 		AccessToken: "mytoken",
 		ProviderID:  "provider",

@@ -10,4 +10,5 @@ var (
 	ErrConflictOnApply         = errors.New("conflict on apply")
 	ErrApply                   = errors.New("apply error")
 	ErrAsyncToken              = errors.New("async token error")
+	ErrBlockedAddress          = errors.New("blocked non-public address")
 )
