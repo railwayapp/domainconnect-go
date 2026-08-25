@@ -10,14 +10,10 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/url"
-	"sort"
-	"strings"
-	"time"
 )
 
-// generateSignature creates RSA-SHA256 signature parameters for Domain Connect.
-// Returns map with "sig", "key" and optionally other signing params.
-func generateSignature(domain, host string, params map[string]string, privateKeyPEM []byte, keyID string) (map[string]string, error) {
+// parsePrivateKey parses a PEM-encoded RSA private key (PKCS8 or PKCS1).
+func parsePrivateKey(privateKeyPEM []byte) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode(privateKeyPEM)
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block")
@@ -37,54 +33,40 @@ func generateSignature(domain, host string, params map[string]string, privateKey
 		return nil, fmt.Errorf("expected RSA private key")
 	}
 
-	// Build signature data: domain + host + sorted params
-	// Format: domain={domain}&host={host}&key=value&key2=value2...
-	sigData := url.Values{}
-	sigData.Set("domain", domain)
-	if host != "" {
-		sigData.Set("host", host)
-	}
+	return rsaKey, nil
+}
 
-	// Add params in sorted order
-	var keys []string
-	for k := range params {
-		keys = append(keys, k)
+// generateSignature creates an RSA-SHA256 signature over an encoded query string.
+// Per spec the signature covers the full query string as sent (excluding sig and key),
+// so callers must pass the exact string they put in the URL. Returns standard base64.
+func generateSignature(query string, privateKeyPEM []byte) (string, error) {
+	rsaKey, err := parsePrivateKey(privateKeyPEM)
+	if err != nil {
+		return "", err
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		sigData.Set(k, params[k])
-	}
-
-	// Build the string to sign (sorted by key)
-	var parts []string
-	sortedKeys := make([]string, 0, len(sigData))
-	for k := range sigData {
-		sortedKeys = append(sortedKeys, k)
-	}
-	sort.Strings(sortedKeys)
-	for _, k := range sortedKeys {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, sigData.Get(k)))
-	}
-	dataToSign := strings.Join(parts, "&")
 
 	// SHA256 hash
-	hash := sha256.Sum256([]byte(dataToSign))
+	hash := sha256.Sum256([]byte(query))
 
 	// RSA sign
 	sig, err := rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, hash[:])
 	if err != nil {
-		return nil, fmt.Errorf("sign: %w", err)
+		return "", fmt.Errorf("sign: %w", err)
 	}
 
-	result := map[string]string{
-		"sig": base64.RawURLEncoding.EncodeToString(sig),
+	return base64.StdEncoding.EncodeToString(sig), nil
+}
+
+// signQuery appends key and sig to an encoded query string.
+// sig is appended last (Cloudflare requirement).
+func signQuery(query string, privateKeyPEM []byte, keyID string) (string, error) {
+	sig, err := generateSignature(query, privateKeyPEM)
+	if err != nil {
+		return "", err
 	}
+
 	if keyID != "" {
-		result["key"] = keyID
+		query += "&key=" + url.QueryEscape(keyID)
 	}
-
-	// Add timestamp for signature freshness
-	result["sigts"] = fmt.Sprintf("%d", time.Now().Unix())
-
-	return result, nil
+	return query + "&sig=" + url.QueryEscape(sig), nil
 }

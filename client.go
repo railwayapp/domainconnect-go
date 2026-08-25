@@ -233,24 +233,16 @@ func (c *Client) GetSyncURL(ctx context.Context, opts SyncURLOptions) (string, e
 		q.Set("force", "1")
 	}
 
-	var sig string
+	u.RawQuery = q.Encode()
+
+	// Sign if private key provided
 	if len(opts.PrivateKey) > 0 {
-		sigParams, err := generateSignature(cfg.DomainRoot, cfg.Host, opts.Params, opts.PrivateKey, opts.KeyID)
+		signed, err := signQuery(u.RawQuery, opts.PrivateKey, opts.KeyID)
 		if err != nil {
 			return "", fmt.Errorf("generate signature: %w", err)
 		}
-		for k, v := range sigParams {
-			if k == "sig" {
-				sig = v // append last (Cloudflare requirement)
-			} else {
-				q.Set(k, v)
-			}
-		}
+		u.RawQuery = signed
 	}
 
-	u.RawQuery = q.Encode()
-	if sig != "" {
-		u.RawQuery += "&sig=" + url.QueryEscape(sig)
-	}
 	return u.String(), nil
 }
