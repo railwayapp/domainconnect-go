@@ -2,10 +2,15 @@ package domainconnect
 
 import (
 	"context"
+	"crypto"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -64,50 +69,56 @@ func TestIdentifyDomainRoot(t *testing.T) {
 }
 
 func TestGenerateSignature(t *testing.T) {
-	privateKey, err := os.ReadFile("testdata/private_key.pem")
-	if err != nil {
-		t.Fatalf("failed to read private key: %v", err)
-	}
+	privateKey, pub := loadTestKey(t)
 
-	params := map[string]string{
-		"IP":       "192.168.1.1",
-		"RANDOMID": "abc123",
-	}
-
-	result, err := generateSignature("example.com", "www", params, privateKey, "key1")
+	query := "IP=192.168.1.1&RANDOMID=abc123&domain=example.com&host=www"
+	sig, err := generateSignature(query, privateKey)
 	if err != nil {
 		t.Fatalf("generateSignature failed: %v", err)
 	}
-
-	if result["sig"] == "" {
-		t.Error("expected non-empty signature")
-	}
-	if result["key"] != "key1" {
-		t.Errorf("expected key=key1, got %q", result["key"])
+	if sig == "" {
+		t.Fatal("expected non-empty signature")
 	}
 
-	// Verify signature is base64url encoded (no +, /, or padding =)
-	if strings.ContainsAny(result["sig"], "+/=") {
-		t.Error("signature should be base64url encoded (no +, /, or =)")
+	// Verify signature is standard base64 (not base64url) and verifies over the query
+	raw, err := base64.StdEncoding.DecodeString(sig)
+	if err != nil {
+		t.Fatalf("sig should be standard base64, got %q: %v", sig, err)
+	}
+	hash := sha256.Sum256([]byte(query))
+	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, hash[:], raw); err != nil {
+		t.Errorf("signature does not verify: %v", err)
 	}
 }
 
 func TestGenerateSignature_NoHost(t *testing.T) {
-	privateKey, err := os.ReadFile("testdata/private_key.pem")
+	privateKey, pub := loadTestKey(t)
+
+	client := New()
+	u, err := client.GetSyncURL(context.Background(), SyncURLOptions{
+		Config: &Config{
+			DomainRoot: "example.com",
+			URLSyncUX:  "connect.provider.com",
+		},
+		ProviderID: "provider1",
+		ServiceID:  "svc1",
+		Params:     map[string]string{"IP": "1.2.3.4"},
+		PrivateKey: privateKey,
+		KeyID:      "key1",
+	})
 	if err != nil {
-		t.Fatalf("failed to read private key: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	params := map[string]string{"IP": "1.2.3.4"}
-
-	result, err := generateSignature("example.com", "", params, privateKey, "")
+	parsed, err := url.Parse(u)
 	if err != nil {
-		t.Fatalf("generateSignature failed: %v", err)
+		t.Fatalf("parse URL: %v", err)
+	}
+	if parsed.Query().Has("host") {
+		t.Errorf("apex request should not carry an empty host param: %q", parsed.RawQuery)
 	}
 
-	if result["sig"] == "" {
-		t.Error("expected non-empty signature")
-	}
+	verifyAsDNSProvider(t, parsed.RawQuery, pub)
 }
 
 func TestGetSyncURL_InvalidDomain(t *testing.T) {
@@ -625,35 +636,6 @@ func TestCheckTemplateSupported(t *testing.T) {
 	}
 }
 
-func TestGenerateSignature_ExactMatch(t *testing.T) {
-	privateKey, err := os.ReadFile("testdata/private_key.pem")
-	if err != nil {
-		t.Fatalf("failed to read private key: %v", err)
-	}
-
-	domain := "example.com"
-	host := "www"
-	params := map[string]string{"IP": "132.148.25.185", "RANDOMTEXT": "shm:1531371203:Hejo"}
-	keyID := "_dck1"
-
-	result, err := generateSignature(domain, host, params, privateKey, keyID)
-	if err != nil {
-		t.Fatalf("generateSignature failed: %v", err)
-	}
-
-	// sig is deterministic (RSA-SHA256 PKCS1v15), sigts varies by time
-	expected := "VB1WAw1rLGyT7Q7UHMe_OPwSZ2HKj7r7rXN6FK22oWbHK7ATug4ZRHyVmnSWL_8r3brhi21_yJ0lH0me63gyPd74biDHCIRnCdYtyik6pankjXjDvF65uBUiZViRza9RhThFCxzCxdUH1ZNJcDL9LUFqC7cMVXvU-1dtn02KdUwViwSJDGWIAMkgLE92jC7aPWVzfA30pSPSCr__hwcJtydGVeFs5pQ-mAjYARP3w_9aWja3k9tMMk5CpFK8zeLIX6rbrHdhmfI9U0AJkRVBpfgmrjDp_TeHFZHPXWgwWg6ZjouQ_mSkaO9i9gBZP8YcT-m9gvRPqlzOViEdlRI1Ug"
-	if result["sig"] != expected {
-		t.Errorf("sig mismatch:\ngot  %s\nwant %s", result["sig"], expected)
-	}
-	if result["key"] != "_dck1" {
-		t.Errorf("key = %q, want %q", result["key"], "_dck1")
-	}
-	if result["sigts"] == "" {
-		t.Error("missing sigts")
-	}
-}
-
 func TestGetDomainConfig_NoDomainConnectRecord(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -888,4 +870,153 @@ func TestDeleteAsync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// loadTestKey reads testdata/private_key.pem and returns it with its public key.
+func loadTestKey(t *testing.T) ([]byte, *rsa.PublicKey) {
+	t.Helper()
+	privateKey, err := os.ReadFile("testdata/private_key.pem")
+	if err != nil {
+		t.Fatalf("failed to read private key: %v", err)
+	}
+	rsaKey, err := parsePrivateKey(privateKey)
+	if err != nil {
+		t.Fatalf("parse private key: %v", err)
+	}
+	return privateKey, &rsaKey.PublicKey
+}
+
+// verifyAsDNSProvider verifies a signed query like a DNS provider does (see DomainConnectApplyZone):
+// strip sig and key from the raw query, keep the rest as-is, and verify RSA-SHA256 over it.
+func verifyAsDNSProvider(t *testing.T, rawQuery string, pub *rsa.PublicKey) {
+	t.Helper()
+
+	var kept []string
+	var sig, key string
+	for _, pair := range strings.Split(rawQuery, "&") {
+		switch {
+		case strings.HasPrefix(pair, "sig="):
+			sig = strings.TrimPrefix(pair, "sig=")
+		case strings.HasPrefix(pair, "key="):
+			key = strings.TrimPrefix(pair, "key=")
+		default:
+			kept = append(kept, pair)
+		}
+	}
+	if sig == "" {
+		t.Fatalf("no sig in query %q", rawQuery)
+	}
+	if key == "" {
+		t.Fatalf("no key in query %q", rawQuery)
+	}
+
+	// sig is URL-encoded standard base64
+	unescaped, err := url.QueryUnescape(sig)
+	if err != nil {
+		t.Fatalf("unescape sig: %v", err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(unescaped)
+	if err != nil {
+		t.Fatalf("sig is not standard base64: %v (sig=%q)", err, unescaped)
+	}
+
+	signed := strings.Join(kept, "&")
+	hash := sha256.Sum256([]byte(signed))
+	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, hash[:], raw); err != nil {
+		t.Fatalf("signature does not verify over query %q: %v", signed, err)
+	}
+}
+
+func TestGetSyncURL_SignatureVerifiesAsDNSProvider(t *testing.T) {
+	privateKey, pub := loadTestKey(t)
+
+	client := New()
+	u, err := client.GetSyncURL(context.Background(), SyncURLOptions{
+		Config: &Config{
+			DomainRoot: "example.com",
+			Host:       "www",
+			URLSyncUX:  "https://connect.provider.com",
+		},
+		ProviderID:  "provider1",
+		ServiceID:   "svc1",
+		Params:      map[string]string{"IP": "1.2.3.4", "RANDOMTEXT": "shm:1531371203:Hejo"},
+		RedirectURL: "https://app.example.net/return?x=1&y=2",
+		State:       "opaque state",
+		GroupIDs:    []string{"g1", "g2"},
+		PrivateKey:  privateKey,
+		KeyID:       "_dck1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	parsed, err := url.Parse(u)
+	if err != nil {
+		t.Fatalf("parse URL: %v", err)
+	}
+
+	// All params must be present and covered by the signature (redirect_uri, state, groupId were previously unsigned)
+	q := parsed.Query()
+	for _, p := range []string{"domain", "host", "IP", "RANDOMTEXT", "redirect_uri", "state", "groupId"} {
+		if q.Get(p) == "" {
+			t.Errorf("missing %s in query %q", p, parsed.RawQuery)
+		}
+	}
+	if q.Get("key") != "_dck1" {
+		t.Errorf("key = %q, want %q", q.Get("key"), "_dck1")
+	}
+	// sigts is not part of the spec
+	if q.Has("sigts") {
+		t.Errorf("unexpected sigts in query %q", parsed.RawQuery)
+	}
+
+	verifyAsDNSProvider(t, parsed.RawQuery, pub)
+}
+
+func TestApplyAsync_SignatureVerifiesAsDNSProvider(t *testing.T) {
+	privateKey, pub := loadTestKey(t)
+
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := New(WithHTTPClient(srv.Client()))
+	asyncCtx := &AsyncContext{
+		Config:      &Config{DomainRoot: "example.com", Host: "www", URLAPI: srv.URL},
+		ProviderID:  "provider1",
+		ServiceID:   "svc1",
+		AccessToken: "token",
+		Params:      map[string]string{"IP": "1.2.3.4"},
+	}
+	err := client.ApplyAsync(context.Background(), asyncCtx, ApplyAsyncOptions{
+		Params:      map[string]string{"RANDOMTEXT": "hello world"},
+		GroupIDs:    []string{"g1"},
+		ForceUpdate: true,
+		PrivateKey:  privateKey,
+		KeyID:       "_dck1",
+	})
+	if err != nil {
+		t.Fatalf("ApplyAsync failed: %v", err)
+	}
+	if gotQuery == "" {
+		t.Fatal("server received no query string")
+	}
+
+	q, err := url.ParseQuery(gotQuery)
+	if err != nil {
+		t.Fatalf("parse query: %v", err)
+	}
+	for _, p := range []string{"domain", "host", "IP", "RANDOMTEXT", "groupId", "force"} {
+		if q.Get(p) == "" {
+			t.Errorf("missing %s in query %q", p, gotQuery)
+		}
+	}
+	if q.Has("sigts") {
+		t.Errorf("unexpected sigts in query %q", gotQuery)
+	}
+
+	verifyAsDNSProvider(t, gotQuery, pub)
 }
